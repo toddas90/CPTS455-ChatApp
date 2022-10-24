@@ -13,7 +13,7 @@ struct Args {
     port: u16,
 
     #[arg(short, long)]
-    host: Option<String>,
+    server_address: Option<String>,
 
     #[arg(short, long)]
     username: Option<String>,
@@ -23,7 +23,7 @@ struct Args {
 async fn main() {
     let args = Args::parse();
 
-    if args.host.is_none() {
+    if args.server_address.is_none() {
         server(args).await;
     } else {
         client(args).await;

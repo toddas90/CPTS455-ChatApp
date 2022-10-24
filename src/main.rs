@@ -1,10 +1,39 @@
-fn main() {
-    println!("Hello, world!");
+use std::env;
+
+use clap::{arg, command, Parser};
+
+pub mod feed;
+pub mod message;
+pub mod user;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, default_value_t = 8080)]
+    port: u16,
+
+    #[arg(short, long)]
+    host: Option<String>,
+
+    #[arg(short, long)]
+    username: Option<String>,
 }
 
-// Intial thoughts:
-// I think this will be a monolithic application. It will act as a server
-// or a client, depending on the command line arguments.
-// Someone will create a server, and multiple clients can connect to it.
-// The server will be able to send messages to all clients, and clients
-// will be able to send messages to the server and to other clients.
+#[tokio::main]
+async fn main() {
+    let args = Args::parse();
+
+    if args.host.is_none() {
+        server(args).await;
+    } else {
+        client(args).await;
+    }
+}
+
+async fn server(args: Args) {
+    // ...
+}
+
+async fn client(args: Args) {
+    // ...
+}

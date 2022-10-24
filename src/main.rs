@@ -80,15 +80,22 @@ async fn send_recv(socket: TcpStream, username: String) -> Result<(), Box<dyn Er
                 return;
             }
 
-            let message = message::Message::new(
-                username.as_ref(),
-                String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
-                chrono::Utc::now(),
-            );
+            // If the message starts with "file::", treat it as a file path. Otherwise, treat it as a message.
+            if buffer.starts_with(b"file::") {
+                let path = String::from_utf8_lossy(&buffer[6..bytes_read - 1]);
+                let file = tokio::fs::read(path.as_ref()).await.unwrap();
+                writer.write_all(&file).await.unwrap();
+            } else {
+                let message = message::Message::new(
+                    username.as_ref(),
+                    String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
+                    chrono::Utc::now(),
+                );
 
-            let encoded = bincode::serialize(&message).unwrap();
+                let encoded = bincode::serialize(&message).unwrap();
 
-            writer.write_all(&encoded).await.unwrap();
+                writer.write_all(&encoded).await.unwrap();
+            }
         }
     });
 

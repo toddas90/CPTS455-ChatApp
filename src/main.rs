@@ -1,11 +1,12 @@
 use std::error::Error;
 
 use clap::{arg, command, Parser};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
-pub mod feed;
 pub mod message;
-pub mod user;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -19,7 +20,7 @@ struct Args {
     server_address: Option<String>,
 
     // If the username is not specified, we'll use "Anonymous".
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "Anonymous")]
     username: Option<String>,
 }
 
@@ -30,7 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if args.server_address.is_none() {
         server(args).await?;
     } else {
-        client(args).await;
+        client(args).await?;
     }
     Ok(())
 }
@@ -42,39 +43,68 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
         .await
         .unwrap_or_else(|_| panic!("Failed to bind to address {}", addr));
 
-    loop {
-        let (mut socket, _) = listener.accept().await?;
-        println!("New connection: {}", socket.peer_addr()?);
+    let socket = match listener.accept().await {
+        Ok((socket, _)) => {
+            println!("New connection: {}", socket.peer_addr().unwrap());
+            Ok(socket)
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            Err(e)
+        }
+    };
 
-        tokio::spawn(async move {
-            let mut buffer = [0; 1024];
-            loop {
-                let n = socket.read(&mut buffer).await.unwrap();
-                if n == 0 {
-                    return;
-                }
-                socket.write_all(&buffer[0..n]).await.unwrap();
-            }
-        });
-    }
+    send_recv(socket.unwrap(), args.username.unwrap()).await
 }
 
-async fn client(args: Args) {
+async fn client(args: Args) -> Result<(), Box<dyn Error>> {
     let addr = format!("{}:{}", args.server_address.unwrap(), args.port);
-    let mut socket = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    let socket = tokio::net::TcpStream::connect(&addr).await.unwrap();
     println!("Connected to {}", addr);
 
+    send_recv(socket, args.username.unwrap()).await
+}
+
+async fn send_recv(socket: TcpStream, username: String) -> Result<(), Box<dyn Error>> {
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
+    let (mut reader, mut writer) = socket.into_split();
 
-    loop {
-        let mut buffer = [0; 1024];
-        let n = stdin.read(&mut buffer).await.unwrap();
-        if n == 0 {
-            return;
+    // Sending Code
+    tokio::spawn(async move {
+        let mut buffer = [0; 2048];
+        loop {
+            print!("> ");
+            let bytes_read = stdin.read(&mut buffer).await.unwrap();
+            if bytes_read == 0 {
+                return;
+            }
+
+            let message = message::Message::new(
+                username.as_ref(),
+                String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
+                chrono::Utc::now(),
+            );
+
+            let encoded = bincode::serialize(&message).unwrap();
+
+            writer.write_all(&encoded).await.unwrap();
         }
-        socket.write_all(&buffer[0..n]).await.unwrap();
-        let n = socket.read(&mut buffer).await.unwrap();
-        stdout.write_all(&buffer[0..n]).await.unwrap();
+    });
+
+    // Receiving Code
+    let mut buffer = [0; 2048];
+    loop {
+        let bytes_read = reader.read(&mut buffer).await.unwrap();
+        if bytes_read == 0 {
+            continue;
+        }
+
+        let message: message::Message = bincode::deserialize(&buffer[..bytes_read]).unwrap();
+
+        stdout
+            .write_all(format!("{}", message).as_bytes())
+            .await
+            .unwrap();
     }
 }

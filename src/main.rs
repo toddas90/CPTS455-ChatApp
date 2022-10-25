@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, net::Ipv4Addr};
 
 use clap::{arg, command, Parser};
 use tokio::{
@@ -11,8 +11,8 @@ pub mod message;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    // If the port is not specified, we'll use 8080.
-    #[arg(short, long, default_value_t = 8080)]
+    // If the port is not specified, we'll use 6969.
+    #[arg(short, long, default_value_t = 6969)]
     port: u16,
 
     // If the host is not specified, we'll assume this user wants to create the server.
@@ -37,11 +37,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 async fn server(args: Args) -> Result<(), Box<dyn Error>> {
-    let addr = format!("127.0.0.1:{}", args.port);
+    let addr = format!("0.0.0.0:{}", args.port);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .unwrap_or_else(|_| panic!("Failed to bind to address {}", addr));
+
+    println!("Listening on {}", listener.local_addr().unwrap());
 
     let socket = match listener.accept().await {
         Ok((socket, _)) => {

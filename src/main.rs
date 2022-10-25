@@ -6,6 +6,7 @@ use tokio::{
 };
 
 pub mod message;
+pub mod user;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -44,13 +45,11 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
 
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    let username = args.username.unwrap();
-
     let (tx, _) = broadcast::channel::<String>(10);
 
     loop {
         let socket = match listener.accept().await {
-            Ok((socket, _)) => {
+            Ok((socket, _addr)) => {
                 println!("New connection: {}", socket.peer_addr().unwrap());
                 Ok(socket)
             }
@@ -62,7 +61,9 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
 
         let tx = tx.clone();
         let mut rx = tx.subscribe();
-        let username = username.clone();
+
+        // Create dummy user in-case the client doesn't send a proper message.
+        let dummy_user = user::User::new("Anonymous");
 
         tokio::spawn(async move {
             let mut socket = socket.unwrap();
@@ -78,16 +79,27 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
                             break;
                         }
 
-                        let message = message::Message::new(&username, &line, chrono::Utc::now());
-                        let message = serde_json::to_string(&message).unwrap();
-                        tx.send(message.to_string()).expect("Failed to send message");
-                        line.clear();
+                        // If the message is not in json format, put it into a message.
+                        if serde_json::from_str::<message::Message>(&line).is_ok() {
+                            let message = line.clone();
+                            tx.send(message).expect("Failed to send message");
+                            line.clear();
+                        } else {
+                            let message = message::Message::new(&dummy_user, &line, chrono::Utc::now());
+                            let message = serde_json::to_string(&message).unwrap();
+                            tx.send(message).expect("Failed to send message");
+                            line.clear();
+                        }
                     }
                     result = rx.recv() => {
                         let message = result.unwrap();
-                        let message = serde_json::from_str::<message::Message>(&message).unwrap();
-                        let message = format!("{} {}: {}", message.created_at.timestamp(), message.user, message.body);
-                        writer.write_all(message.as_bytes()).await.unwrap();
+                        if serde_json::from_str::<message::Message>(&message).is_ok() {
+                            let message = serde_json::from_str::<message::Message>(&message).unwrap();
+                            let message = format!("{} {}: {}", message.created_at.timestamp(), message.username, message.body);
+                            writer.write_all(message.as_bytes()).await.unwrap();
+                        } else {
+                            writer.write_all(message.as_bytes()).await.unwrap();
+                        }
                     }
                 }
             }
@@ -97,23 +109,41 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
 
 async fn client(args: Args) -> Result<(), Box<dyn Error>> {
     let addr = format!("{}:{}", args.server_address.unwrap(), args.port);
-    let mut socket = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(&addr)
+        .await
+        .expect("Failed to connect to server");
     println!("Connected to {}", addr);
+    let user_info = user::User::new(&args.username.unwrap());
 
     let (reader, mut writer) = socket.split();
 
+    let mut user_stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let mut reader = tokio::io::BufReader::new(reader);
-    let mut line = String::new();
+
+    let mut in_line = String::new();
+    let mut out_line = String::new();
 
     loop {
-        line.clear();
-        let bytes_read = reader.read_line(&mut line).await?;
+        tokio::select! {
+            _ = user_stdin.read_line(&mut in_line) => {
+                if in_line.is_empty() {
+                    break;
+                }
 
-        if bytes_read == 0 {
-            Err("Connection closed")?;
+                let message = message::Message::new(&user_info, &in_line, chrono::Utc::now());
+                let message = serde_json::to_string(&message).unwrap();
+                writer.write_all(message.as_bytes()).await.unwrap();
+                in_line.clear();
+            }
+            _ = reader.read_line(&mut out_line) => {
+                if out_line.is_empty() {
+                    break;
+                }
+
+                println!("{}", out_line);
+                out_line.clear();
+            }
         }
-
-        println!("{}", line);
-        writer.write_all(line.as_bytes()).await?;
     }
+    Ok(())
 }

@@ -1,7 +1,7 @@
 use clap::{arg, command, Parser};
-use std::error::Error;
+use std::{error::Error, io};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     sync::broadcast,
 };
 
@@ -45,7 +45,7 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
 
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    let (tx, _) = broadcast::channel::<String>(10);
+    let (tx, _) = broadcast::channel::<String>(16);
 
     loop {
         let socket = match listener.accept().await {
@@ -63,7 +63,8 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
         let mut rx = tx.subscribe();
 
         // Create dummy user in-case the client doesn't send a proper message.
-        let dummy_user = user::User::new("Anonymous");
+        let username = "Anonymous".to_string() + &rand::random::<u16>().to_string();
+        let dummy_user = user::User::new(&username);
 
         tokio::spawn(async move {
             let mut socket = socket.unwrap();
@@ -75,11 +76,11 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
             loop {
                 tokio::select! {
                     _ = reader.read_line(&mut line) => {
+                        println!("Received msg from {}", reader.get_ref().peer_addr().unwrap());
                         if line.is_empty() {
                             break;
                         }
 
-                        // If the message is not in json format, put it into a message.
                         if serde_json::from_str::<message::Message>(&line).is_ok() {
                             let message = line.clone();
                             tx.send(message).expect("Failed to send message");
@@ -109,41 +110,33 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
 
 async fn client(args: Args) -> Result<(), Box<dyn Error>> {
     let addr = format!("{}:{}", args.server_address.unwrap(), args.port);
-    let mut socket = tokio::net::TcpStream::connect(&addr)
+    let socket = tokio::net::TcpStream::connect(&addr)
         .await
         .expect("Failed to connect to server");
     println!("Connected to {}", addr);
     let user_info = user::User::new(&args.username.unwrap());
 
-    let (reader, mut writer) = socket.split();
+    let (reader, mut writer) = socket.into_split();
 
-    let mut user_stdin = tokio::io::BufReader::new(tokio::io::stdin());
-    let mut reader = tokio::io::BufReader::new(reader);
+    let mut line = String::new();
 
-    let mut in_line = String::new();
-    let mut out_line = String::new();
+    let mut reader = BufReader::new(reader).lines();
 
-    loop {
-        tokio::select! {
-            _ = user_stdin.read_line(&mut in_line) => {
-                if in_line.is_empty() {
-                    break;
-                }
-
-                let message = message::Message::new(&user_info, &in_line, chrono::Utc::now());
-                let message = serde_json::to_string(&message).unwrap();
-                writer.write_all(message.as_bytes()).await.unwrap();
-                in_line.clear();
-            }
-            _ = reader.read_line(&mut out_line) => {
-                if out_line.is_empty() {
-                    break;
-                }
-
-                println!("{}", out_line);
-                out_line.clear();
-            }
+    // Recv
+    tokio::spawn(async move {
+        loop {
+            let line = reader.next_line().await.unwrap().unwrap();
+            println!("{}", line);
         }
+    });
+
+    // Send
+    loop {
+        io::stdin().read_line(&mut line).unwrap();
+        let message = message::Message::new(&user_info, &line, chrono::Utc::now());
+        let mut message = serde_json::to_string(&message).unwrap();
+        message += "\n";
+        writer.write_all(message.as_bytes()).await.unwrap();
+        line.clear();
     }
-    Ok(())
 }

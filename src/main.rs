@@ -1,8 +1,8 @@
 use clap::{arg, command, Parser};
 use std::error::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    io::{AsyncBufReadExt, AsyncWriteExt},
+    sync::broadcast,
 };
 
 pub mod message;
@@ -44,108 +44,76 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
 
     println!("Listening on {}", listener.local_addr().unwrap());
 
-    let socket = match listener.accept().await {
-        Ok((socket, _)) => {
-            println!("New connection: {}", socket.peer_addr().unwrap());
-            Ok(socket)
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            Err(e)
-        }
-    };
+    let username = args.username.unwrap();
 
-    send_recv(socket.unwrap(), args.username.unwrap()).await
+    let (tx, _) = broadcast::channel::<String>(10);
+
+    loop {
+        let socket = match listener.accept().await {
+            Ok((socket, _)) => {
+                println!("New connection: {}", socket.peer_addr().unwrap());
+                Ok(socket)
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                Err(e)
+            }
+        };
+
+        let tx = tx.clone();
+        let mut rx = tx.subscribe();
+        let username = username.clone();
+
+        tokio::spawn(async move {
+            let mut socket = socket.unwrap();
+            let (reader, mut writer) = socket.split();
+
+            let mut reader = tokio::io::BufReader::new(reader);
+            let mut line = String::new();
+
+            loop {
+                tokio::select! {
+                    _ = reader.read_line(&mut line) => {
+                        if line.is_empty() {
+                            break;
+                        }
+
+                        let message = message::Message::new(&username, &line, chrono::Utc::now());
+                        let message = serde_json::to_string(&message).unwrap();
+                        tx.send(message.to_string()).expect("Failed to send message");
+                        line.clear();
+                    }
+                    result = rx.recv() => {
+                        let message = result.unwrap();
+                        let message = serde_json::from_str::<message::Message>(&message).unwrap();
+                        let message = format!("{} {}: {}", message.created_at.timestamp(), message.user, message.body);
+                        writer.write_all(message.as_bytes()).await.unwrap();
+                    }
+                }
+            }
+        });
+    }
 }
 
 async fn client(args: Args) -> Result<(), Box<dyn Error>> {
     let addr = format!("{}:{}", args.server_address.unwrap(), args.port);
-    let socket = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    let mut socket = tokio::net::TcpStream::connect(&addr).await.unwrap();
     println!("Connected to {}", addr);
 
-    send_recv(socket, args.username.unwrap()).await
-}
+    let (reader, mut writer) = socket.split();
 
-async fn send_recv(socket: TcpStream, username: String) -> Result<(), Box<dyn Error>> {
-    let mut stdin = tokio::io::stdin();
-    let mut stdout = tokio::io::stdout();
-    let (mut reader, mut writer) = socket.into_split();
+    let mut reader = tokio::io::BufReader::new(reader);
+    let mut line = String::new();
 
-    // Sending Code
-    tokio::spawn(async move {
-        let mut buffer = [0; 2048];
-        loop {
-            print!("> ");
-            let bytes_read = stdin.read(&mut buffer).await.unwrap();
-            if bytes_read == 0 {
-                return;
-            }
-
-            // if buffer.starts_with(b"file::") {
-            //     // Ask if the other user wants to receive the file.
-            //     let filename = String::from_utf8_lossy(&buffer[6..bytes_read - 1]);
-            //     let mut ask = [0; 64];
-            //     writer
-            //         .write_all(
-            //             format!(
-            //             "{} wants to send you a file named {}. Do you want to receive it? (y/n) ",
-            //             username, filename
-            //         )
-            //             .as_bytes(),
-            //         )
-            //         .await
-            //         .unwrap();
-
-            //     // Wait for the user's response.
-            //     let bytes_read = reader.read(&mut ask).await.unwrap();
-            //     if bytes_read == 0 {
-            //         return;
-            //     }
-
-            //     // If the user says yes, send the file.
-            //     if ask.starts_with(b"y") {
-            //         print!("Sending file...");
-            //         writer.write_all(&buffer[6..bytes_read - 1]).await.unwrap();
-            //     } else {
-            //         print!("File transfer cancelled.");
-            //     }
-            // } else {
-            //     let message = message::Message::new(
-            //         username.as_ref(),
-            //         String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
-            //         chrono::Utc::now(),
-            //     );
-
-            //     let encoded = bincode::serialize(&message).unwrap();
-
-            //     writer.write_all(&encoded).await.unwrap();
-            // }
-
-            let message = message::Message::new(
-                username.as_ref(),
-                String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
-                chrono::Utc::now(),
-            );
-
-            let encoded = bincode::serialize(&message).unwrap();
-
-            writer.write_all(&encoded).await.unwrap();
-        }
-    });
-
-    // Receiving Code
-    let mut buffer = [0; 2048];
     loop {
-        let bytes_read = reader.read(&mut buffer).await.unwrap();
+        line.clear();
+        let bytes_read = reader.read_line(&mut line).await?;
+
         if bytes_read == 0 {
-            continue;
+            Err("Connection closed")?;
         }
 
-        let message: message::Message = bincode::deserialize(&buffer[..bytes_read]).unwrap();
-
-        stdout
-            .write_all(format!("{}", message).as_bytes())
-            .await
-            .unwrap();
+        println!("{}", line);
+        writer.write_all(line.as_bytes()).await?;
     }
 }

@@ -1,6 +1,5 @@
-use std::{error::Error, net::Ipv4Addr};
-
 use clap::{arg, command, Parser};
+use std::error::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -82,22 +81,55 @@ async fn send_recv(socket: TcpStream, username: String) -> Result<(), Box<dyn Er
                 return;
             }
 
-            // If the message starts with "file::", treat it as a file path. Otherwise, treat it as a message.
-            if buffer.starts_with(b"file::") {
-                let path = String::from_utf8_lossy(&buffer[6..bytes_read - 1]);
-                let file = tokio::fs::read(path.as_ref()).await.unwrap();
-                writer.write_all(&file).await.unwrap();
-            } else {
-                let message = message::Message::new(
-                    username.as_ref(),
-                    String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
-                    chrono::Utc::now(),
-                );
+            // if buffer.starts_with(b"file::") {
+            //     // Ask if the other user wants to receive the file.
+            //     let filename = String::from_utf8_lossy(&buffer[6..bytes_read - 1]);
+            //     let mut ask = [0; 64];
+            //     writer
+            //         .write_all(
+            //             format!(
+            //             "{} wants to send you a file named {}. Do you want to receive it? (y/n) ",
+            //             username, filename
+            //         )
+            //             .as_bytes(),
+            //         )
+            //         .await
+            //         .unwrap();
 
-                let encoded = bincode::serialize(&message).unwrap();
+            //     // Wait for the user's response.
+            //     let bytes_read = reader.read(&mut ask).await.unwrap();
+            //     if bytes_read == 0 {
+            //         return;
+            //     }
 
-                writer.write_all(&encoded).await.unwrap();
-            }
+            //     // If the user says yes, send the file.
+            //     if ask.starts_with(b"y") {
+            //         print!("Sending file...");
+            //         writer.write_all(&buffer[6..bytes_read - 1]).await.unwrap();
+            //     } else {
+            //         print!("File transfer cancelled.");
+            //     }
+            // } else {
+            //     let message = message::Message::new(
+            //         username.as_ref(),
+            //         String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
+            //         chrono::Utc::now(),
+            //     );
+
+            //     let encoded = bincode::serialize(&message).unwrap();
+
+            //     writer.write_all(&encoded).await.unwrap();
+            // }
+
+            let message = message::Message::new(
+                username.as_ref(),
+                String::from_utf8_lossy(&buffer[..bytes_read]).as_ref(),
+                chrono::Utc::now(),
+            );
+
+            let encoded = bincode::serialize(&message).unwrap();
+
+            writer.write_all(&encoded).await.unwrap();
         }
     });
 

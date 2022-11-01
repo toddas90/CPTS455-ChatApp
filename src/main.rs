@@ -1,6 +1,6 @@
 use clap::{arg, command, Parser};
-use crossterm::{cursor::MoveUp, terminal::Clear, ExecutableCommand};
-use std::{error::Error, io};
+use crossterm::ExecutableCommand;
+use std::{error::Error, fmt::Write, io};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::tcp::OwnedWriteHalf,
@@ -80,8 +80,7 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
             let (reader, mut writer) = socket.split();
             let mut reader = tokio::io::BufReader::new(reader);
             let mut line = String::new();
-            let mut temp_file: message::FileMessage =
-                message::FileMessage::new(&dummy_user, "temp", 0, &vec![]);
+            let mut file_storage: Vec<message::FileMessage> = vec![];
 
             // Main loop.
             loop {
@@ -95,23 +94,37 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
 
                         if serde_json::from_str::<message::Command>(&line).is_ok() {
                             let command: message::Command = serde_json::from_str(&line).unwrap();
-                            if command.command == "/recvinfo" {
-                                println!("Received command");
-                                let msg = format!("{}: {} bytes -> {}\n", temp_file.username, temp_file.file_size, temp_file.file_name);
-                                writer.write_all(msg.as_bytes()).await.unwrap();
-                                line.clear();
-                            }
                             if command.command == "/recvfile" {
                                 println!("Received command");
-                                let mut serialized = serde_json::to_string(&temp_file).unwrap();
-                                serialized += "\n";
-                                writer.write_all(serialized.as_bytes()).await.unwrap();
-                                writer.write_all("Ok\n".to_string().as_bytes()).await.unwrap();
+                                match file_storage.iter().find(|x| x.file_name == command.args[0]) {
+                                    Some(x) => {
+                                        let mut serialized = serde_json::to_string(&x).unwrap();
+                                        serialized += "\n";
+                                        writer.write_all(serialized.as_bytes()).await.unwrap();
+                                        writer.write_all("Ok\n".to_string().as_bytes()).await.unwrap();
+                                    },
+                                    None => {
+                                        let msg = "File not found\n".to_string();
+                                        writer.write_all(msg.as_bytes()).await.unwrap();
+                                    }
+                                };
+                                line.clear();
+                            } else if command.command == "/recvinfo" {
+                                println!("Received command");
+                                let mut msg = String::new();
+                                for file in file_storage.iter() {
+                                    write!(msg, "{}: {} bytes -> {}\n", file.username, file.file_size, file.file_name).unwrap();
+                                }
+                                if msg.is_empty() {
+                                    msg = "No files available\n".to_string();
+                                }
+                                writer.write_all(msg.as_bytes()).await.unwrap();
                                 line.clear();
                             }
                         } else if serde_json::from_str::<message::FileMessage>(&line).is_ok() {
                             println!("Received file message");
-                            temp_file = serde_json::from_str(&line).unwrap();
+                            // let file_msg: message::FileMessage = serde_json::from_str(&line).unwrap();
+                            // file_storage.push(file_msg);
                             writer.write_all("Ok\n".to_string().as_bytes()).await.unwrap();
 
                             let message = line.clone();
@@ -129,21 +142,6 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
                             tx.send(message).expect("Failed to send message");
                             line.clear();
                         }
-
-                        // // If the message is a valid JSON, we'll send it to the channel.
-                        // // If not, we wrap it in a message before sending it.
-                        // // (This is to handle telnet clients)
-                        // if serde_json::from_str::<message::TextMessage>(&line).is_ok() {
-                        //     let message = line.clone();
-                        //     tx.send(message).expect("Failed to send message");
-                        //     line.clear();
-                        // } else {
-                        //     println!("Message from Telnet client; Wrappping in message struct");
-                        //     let message = message::TextMessage::new(&dummy_user, &line, chrono::Utc::now());
-                        //     let message = serde_json::to_string(&message).unwrap();
-                        //     tx.send(message).expect("Failed to send message");
-                        //     line.clear();
-                        // }
                     }
                     // Send the message to the other clients.
                     result = rx.recv() => {
@@ -154,7 +152,8 @@ async fn server(args: Args) -> Result<(), Box<dyn Error>> {
                             let message = format!("{} {}: {}", message.created_at.format("%d/%m/%Y %H:%M"), message.username, message.body);
                             writer.write_all(message.as_bytes()).await.unwrap();
                         } else if serde_json::from_str::<message::FileMessage>(&message).is_ok() {
-                            temp_file = serde_json::from_str::<message::FileMessage>(&message).unwrap();
+                            let temp_file = serde_json::from_str::<message::FileMessage>(&message).unwrap();
+                            file_storage.push(temp_file);
                         } else {
                             writer.write_all(message.as_bytes()).await.unwrap();
                         }
@@ -245,11 +244,11 @@ async fn process_cmd(
     match cmd[0] {
         "/help" => {
             println!("Available commands:");
-            println!("    /help - Show this message");
-            println!("    /send - Send a file");
-            println!("    /recvinfo - Information about the file");
-            println!("    /recv - Receive a file");
-            println!("    /quit - Quit the application");
+            println!("    /help                - Show this message");
+            println!("    /send <path>         - Send a file");
+            println!("    /recvlist            - Get list of files");
+            println!("    /recvfile <filename> - Receive a file");
+            println!("    /quit                - Quit the application");
             Ok(())
         }
         "/send" => {
@@ -267,15 +266,16 @@ async fn process_cmd(
             writer.write_all(message.as_bytes()).await.unwrap();
             Ok(())
         }
-        "/recvinfo" => {
-            let cmd = message::Command::new(user_info, cmd[0]);
+        "/recvfile" => {
+            let args = cmd[1..].to_vec();
+            let cmd = message::Command::new(user_info, cmd[0], args);
             let mut message = serde_json::to_string(&cmd).unwrap();
             message += "\n";
             writer.write_all(message.as_bytes()).await.unwrap();
             Ok(())
         }
-        "/recvfile" => {
-            let cmd = message::Command::new(user_info, cmd[0]);
+        "/recvinfo" => {
+            let cmd = message::Command::new(user_info, cmd[0], vec![]);
             let mut message = serde_json::to_string(&cmd).unwrap();
             message += "\n";
             writer.write_all(message.as_bytes()).await.unwrap();

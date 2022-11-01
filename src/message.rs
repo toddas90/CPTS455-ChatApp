@@ -26,6 +26,7 @@ pub struct Command {
     pub username: String,
     pub user_id: Uuid,
     pub command: String,
+    pub args: Vec<String>,
 }
 
 // impl std::fmt::Display for TextMessage {
@@ -58,11 +59,12 @@ impl FileMessage {
 }
 
 impl Command {
-    pub fn new(user: &user::User, command: &str) -> Self {
+    pub fn new(user: &user::User, command: &str, args: Vec<&str>) -> Self {
         Command {
             username: user.username.to_owned(),
             user_id: user.user_id,
             command: String::from(command),
+            args: args.iter().map(|s| String::from(*s)).collect(),
         }
     }
 }

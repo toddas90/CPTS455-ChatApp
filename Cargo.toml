@@ -1,9 +1,10 @@
 [package]
 name = "chat-app-rs-455"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Andrew Todd <andrew.s.todd@wsu.edu>"]
 license = "BSD-3-Clause"
+description = "A very basic chat app written in Rust\nIf no server is specified, program acts as a server"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

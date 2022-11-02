@@ -246,7 +246,7 @@ async fn process_cmd(
             println!("Available commands:");
             println!("    /help                - Show this message");
             println!("    /send <path>         - Send a file");
-            println!("    /recvlist            - Get list of files");
+            println!("    /recvinfo            - Get list of files");
             println!("    /recvfile <filename> - Receive a file");
             println!("    /quit                - Quit the application");
             Ok(())

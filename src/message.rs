@@ -29,12 +29,6 @@ pub struct Command {
     pub args: Vec<String>,
 }
 
-// impl std::fmt::Display for TextMessage {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}: {}", self.username, self.body)
-//     }
-// }
-
 impl TextMessage {
     pub fn new(user: &user::User, body: &str, created_at: DateTime<Utc>) -> Self {
         TextMessage {
@@ -67,4 +61,30 @@ impl Command {
             args: args.iter().map(|s| String::from(*s)).collect(),
         }
     }
+}
+
+pub fn encrypt(message: String) -> String {
+    // Simple encryption using caesar cipher with 7 as the key
+    let mut encrypted = String::new();
+    for c in message.chars() {
+        let mut new_c = c as u8 + 7;
+        if new_c > 126 {
+            new_c -= 95;
+        }
+        encrypted.push(new_c as char);
+    }
+    encrypted
+}
+
+pub fn decrypt(cipher: &[u8]) -> String {
+    // Simple decryption using caesar cipher with 7 as the key
+    let mut decrypted = String::new();
+    for c in cipher {
+        let mut new_c = *c as u8 - 7;
+        if new_c < 32 {
+            new_c += 95;
+        }
+        decrypted.push(new_c as char);
+    }
+    decrypted
 }
